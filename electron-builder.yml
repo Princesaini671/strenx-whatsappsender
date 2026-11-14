@@ -1,0 +1,26 @@
+appId: com.strenx.whatsappsender
+productName: Strenx WhatsApp Sender
+copyright: Copyright © 2026 Strenx Software
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - dist-server/**/*
+  - dist-electron/**/*
+  - package.json
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: Strenx-WhatsApp-Sender-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Strenx WhatsApp Sender

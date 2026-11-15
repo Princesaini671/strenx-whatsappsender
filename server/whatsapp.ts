@@ -10,12 +10,14 @@ import path from 'node:path';
 import pino from 'pino';
 import QRCode from 'qrcode';
 import {
-  db,
+  findCampaignMessageByWaId,
   getAllSettings,
   incrementDailyStat,
   recalculateCampaignCounts,
   setSetting,
-} from './db.ts';
+  stampNow,
+  updateCampaignMessageFields,
+} from './store.ts';
 import { broadcastEvent } from './events.ts';
 import { SESSION_DIR, ensureDataDirectories } from './paths.ts';
 
@@ -287,20 +289,17 @@ class WhatsAppManager {
   }
 
   private handleDeliveryAck(waMessageId: string): void {
-    const row = db
-      .prepare(`SELECT id, campaign_id, status FROM campaign_messages WHERE wa_message_id = ?`)
-      .get(waMessageId) as { id: number; campaign_id: number; status: string } | undefined;
+    const row = findCampaignMessageByWaId(waMessageId);
 
     if (!row || row.status === 'delivered') return;
 
-    db.prepare(`
-      UPDATE campaign_messages
-      SET status = 'delivered',
-          processed_at = COALESCE(processed_at, datetime('now'))
-      WHERE id = ?
-    `).run(row.id);
+    const previousStatus = row.status;
+    updateCampaignMessageFields(row.id, {
+      status: 'delivered',
+      processed_at: row.processed_at || stampNow(),
+    });
 
-    if (row.status === 'submitted') {
+    if (previousStatus === 'submitted') {
       const today = new Date().toISOString().slice(0, 10);
       incrementDailyStat(today, { successful: 1 });
     }

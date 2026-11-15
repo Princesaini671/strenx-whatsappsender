@@ -1,0 +1,138 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_.\\-@]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isValidTrialKey(data, keyId) {
+      return data.keys().hasAll(['username', 'passwordHash', 'active', 'durationHours', 'createdAt', 'createdBy'])
+        && data.keys().hasOnly(['username', 'passwordHash', 'active', 'durationHours', 'createdAt', 'activatedAt', 'createdBy'])
+        && data.username is string
+        && data.username.size() >= 2
+        && data.username.size() <= 64
+        && data.username.matches('^[a-zA-Z0-9_.\\-@]+$')
+        && data.username == keyId
+        && data.passwordHash is string
+        && data.passwordHash.size() == 64
+        && data.passwordHash.matches('^[a-f0-9]{64}$')
+        && data.active is bool
+        && data.durationHours == 24
+        && data.createdAt is timestamp
+        && (!('activatedAt' in data) || data.activatedAt == null || data.activatedAt is timestamp)
+        && data.createdBy is string
+        && data.createdBy.size() >= 1
+        && data.createdBy.size() <= 128;
+    }
+
+    function isValidPermanentKey(data, keyId) {
+      return data.keys().hasAll(['username', 'passwordHash', 'active', 'createdAt', 'createdBy'])
+        && data.keys().hasOnly(['username', 'passwordHash', 'active', 'createdAt', 'createdBy'])
+        && data.username is string
+        && data.username.size() >= 2
+        && data.username.size() <= 64
+        && data.username.matches('^[a-zA-Z0-9_.\\-@]+$')
+        && data.username == keyId
+        && data.passwordHash is string
+        && data.passwordHash.size() == 64
+        && data.passwordHash.matches('^[a-f0-9]{64}$')
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.createdBy is string
+        && data.createdBy.size() >= 1
+        && data.createdBy.size() <= 128;
+    }
+
+    function isValidAdmin(data) {
+      return data.keys().hasAll(['email', 'createdAt'])
+        && data.keys().hasOnly(['email', 'createdAt'])
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.createdAt is timestamp;
+    }
+
+    match /trial_key/{keyId} {
+      allow get: if isValidId(keyId);
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(keyId)
+        && isValidTrialKey(incoming(), keyId)
+        && incoming().createdAt == request.time
+        && incoming().createdBy == request.auth.uid
+        && (!('activatedAt' in incoming()) || incoming().activatedAt == null);
+      allow update: if isValidId(keyId)
+        && isValidTrialKey(incoming(), keyId)
+        && incoming().createdAt == existing().createdAt
+        && incoming().createdBy == existing().createdBy
+        && incoming().username == existing().username
+        && incoming().durationHours == existing().durationHours
+        && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['passwordHash', 'active', 'activatedAt']))
+          || (
+            existing().active == true
+            && (!('activatedAt' in existing()) || existing().activatedAt == null)
+            && incoming().activatedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['activatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(keyId);
+    }
+
+    match /permanent/{keyId} {
+      allow get: if isValidId(keyId);
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(keyId)
+        && isValidPermanentKey(incoming(), keyId)
+        && incoming().createdAt == request.time
+        && incoming().createdBy == request.auth.uid;
+      allow update: if isAdmin()
+        && isValidId(keyId)
+        && isValidPermanentKey(incoming(), keyId)
+        && incoming().createdAt == existing().createdAt
+        && incoming().createdBy == existing().createdBy
+        && incoming().username == existing().username
+        && incoming().diff(existing()).affectedKeys().hasOnly(['passwordHash', 'active']);
+      allow delete: if isAdmin() && isValidId(keyId);
+    }
+
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && ((isSignedIn() && request.auth.uid == adminUid) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(adminUid)
+        && isValidAdmin(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(adminUid)
+        && isValidAdmin(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email']);
+      allow delete: if isAdmin() && isValidId(adminUid);
+    }
+  }
+}

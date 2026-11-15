@@ -1,6 +1,6 @@
 {
   "name": "Strenx WhatsApp Sender",
-  "description": "Desktop WhatsApp bulk messaging software with QR login, CSV/bulk phone import, media composer, speed controls, live progress dashboard, and SQLite analytics.",
+  "description": "Desktop WhatsApp bulk messaging software with QR login, CSV/bulk phone import, media composer, speed controls, live progress dashboard, and local analytics.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

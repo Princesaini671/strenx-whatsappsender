@@ -1,13 +1,25 @@
 import {
-  db,
-  getAllSettings,
-  incrementDailyStat,
-  recalculateCampaignCounts,
+  createCampaignWithRecipients,
   createLocalBackup,
+  getActiveCampaignByStatus,
+  getActiveOrLatestCampaign as getStoreActiveOrLatestCampaign,
+  getActiveRunningOrPausedCampaign,
+  getAllSettings,
+  getCampaignById,
+  getDraft,
+  getNextQueuedMessage,
+  getPreviouslyMessagedSet,
+  getValidContactPhones,
+  incrementDailyStat,
+  listCampaignMessages,
+  recalculateCampaignCounts,
+  stampNow,
+  stopQueuedMessagesForCampaign,
+  updateCampaignFields,
+  updateCampaignMessageFields,
   type CampaignMessageRow,
   type CampaignRow,
-  type DraftMessageRow,
-} from './db.ts';
+} from './store.ts';
 import { broadcastEvent } from './events.ts';
 import { whatsappManager } from './whatsapp.ts';
 
@@ -25,26 +37,11 @@ class CampaignRunner {
   }
 
   public getActiveOrLatestCampaign(): CampaignRow | null {
-    const active = db
-      .prepare(`SELECT * FROM campaigns WHERE status IN ('running', 'paused') ORDER BY id DESC LIMIT 1`)
-      .get() as CampaignRow | undefined;
-    if (active) return active;
-
-    const latest = db
-      .prepare(`SELECT * FROM campaigns ORDER BY id DESC LIMIT 1`)
-      .get() as CampaignRow | undefined;
-    return latest ?? null;
+    return getStoreActiveOrLatestCampaign();
   }
 
-  public getCampaignMessages(campaignId: number, limit = 200, statusFilter?: string): CampaignMessageRow[] {
-    if (statusFilter && statusFilter !== 'all') {
-      return db
-        .prepare(`SELECT * FROM campaign_messages WHERE campaign_id = ? AND status = ? ORDER BY id ASC LIMIT ?`)
-        .all(campaignId, statusFilter, limit) as CampaignMessageRow[];
-    }
-    return db
-      .prepare(`SELECT * FROM campaign_messages WHERE campaign_id = ? ORDER BY id ASC LIMIT ?`)
-      .all(campaignId, limit) as CampaignMessageRow[];
+  public getCampaignMessages(campaignId: number, limit = 200, statusFilter = 'all'): CampaignMessageRow[] {
+    return listCampaignMessages(campaignId, limit, statusFilter);
   }
 
   private emitCampaign(campaign: CampaignRow | undefined): void {
@@ -57,9 +54,7 @@ class CampaignRunner {
     name?: string;
     skipAlreadyMessaged?: boolean;
   }): Promise<{ campaign: CampaignRow; skippedDuplicates: number }> {
-    const existingActive = db
-      .prepare(`SELECT * FROM campaigns WHERE status IN ('running', 'paused') ORDER BY id DESC LIMIT 1`)
-      .get() as CampaignRow | undefined;
+    const existingActive = getActiveRunningOrPausedCampaign();
 
     if (existingActive) {
       throw new Error(
@@ -71,7 +66,7 @@ class CampaignRunner {
       throw new Error('WhatsApp is not connected. Please scan the QR code or configure Cloud API first.');
     }
 
-    const draft = db.prepare(`SELECT * FROM draft_message WHERE id = 1`).get() as DraftMessageRow;
+    const draft = getDraft();
     const hasText = Boolean(draft.body_text && draft.body_text.trim().length > 0);
     const hasAttachment = Boolean(draft.attachment_path);
 
@@ -79,11 +74,8 @@ class CampaignRunner {
       throw new Error('Cannot start campaign with an empty message and no attachment.');
     }
 
-    const validContacts = db
-      .prepare(`SELECT phone_e164 FROM contacts WHERE is_valid = 1 ORDER BY id ASC`)
-      .all() as Array<{ phone_e164: string }>;
-
-    if (validContacts.length === 0) {
+    let recipients = getValidContactPhones();
+    if (recipients.length === 0) {
       throw new Error('No valid phone numbers available. Add or import numbers first.');
     }
 
@@ -93,14 +85,10 @@ class CampaignRunner {
         ? options.skipAlreadyMessaged
         : settings.skip_already_messaged === '1';
 
-    let recipients = validContacts.map((c) => c.phone_e164);
     let skippedDuplicates = 0;
 
     if (skipAlready) {
-      const previouslySentRows = db
-        .prepare(`SELECT DISTINCT phone_e164 FROM campaign_messages WHERE status IN ('submitted', 'delivered')`)
-        .all() as Array<{ phone_e164: string }>;
-      const sentSet = new Set(previouslySentRows.map((r) => r.phone_e164));
+      const sentSet = getPreviouslyMessagedSet();
       const filtered = recipients.filter((phone) => !sentSet.has(phone));
       skippedDuplicates = recipients.length - filtered.length;
       recipients = filtered;
@@ -125,59 +113,33 @@ class CampaignRunner {
         minute: '2-digit',
       })}`;
 
-    const createTx = db.transaction(() => {
-      const info = db
-        .prepare(`
-          INSERT INTO campaigns (
-            name, message_text, attachment_path, attachment_name, attachment_mime, attachment_type,
-            interval_seconds, batch_size, batch_pause_seconds,
-            status, total_count, submitted_count, delivered_count, failed_count, remaining_count,
-            processing_count, current_phone, last_activity, started_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, 0, 0, 0, ?, 0, NULL, ?, datetime('now'))
-        `)
-        .run(
-          campaignName,
-          draft.body_text || '',
-          draft.attachment_path,
-          draft.attachment_name,
-          draft.attachment_mime,
-          draft.attachment_type,
-          intervalSeconds,
-          batchSize,
-          batchPauseSeconds,
-          recipients.length,
-          recipients.length,
-          `Campaign started (${recipients.length} queued${skippedDuplicates > 0 ? `, ${skippedDuplicates} previously messaged skipped` : ''})`
-        );
+    const campaign = createCampaignWithRecipients(
+      {
+        name: campaignName,
+        message_text: draft.body_text || '',
+        attachment_path: draft.attachment_path,
+        attachment_name: draft.attachment_name,
+        attachment_mime: draft.attachment_mime,
+        attachment_type: draft.attachment_type,
+        interval_seconds: intervalSeconds,
+        batch_size: batchSize,
+        batch_pause_seconds: batchPauseSeconds,
+        last_activity: `Campaign started (${recipients.length} queued${
+          skippedDuplicates > 0 ? `, ${skippedDuplicates} previously messaged skipped` : ''
+        })`,
+      },
+      recipients
+    );
 
-      const campaignId = Number(info.lastInsertRowid);
-      const insertMsg = db.prepare(`
-        INSERT OR IGNORE INTO campaign_messages (campaign_id, phone_e164, status)
-        VALUES (?, ?, 'queued')
-      `);
-
-      for (const phone of recipients) {
-        insertMsg.run(campaignId, phone);
-      }
-
-      return campaignId;
-    });
-
-    const campaignId = createTx();
-    const campaign = recalculateCampaignCounts(campaignId)!;
     this.emitCampaign(campaign);
-
-    this.activeCampaignId = campaignId;
-    this.startLoop(campaignId);
+    this.activeCampaignId = campaign.id;
+    this.startLoop(campaign.id);
 
     return { campaign, skippedDuplicates };
   }
 
   public async pauseCampaign(reason = 'Paused by user'): Promise<CampaignRow | null> {
-    const active = db
-      .prepare(`SELECT * FROM campaigns WHERE status = 'running' ORDER BY id DESC LIMIT 1`)
-      .get() as CampaignRow | undefined;
-
+    const active = getActiveCampaignByStatus('running');
     if (!active) {
       return this.getActiveOrLatestCampaign();
     }
@@ -187,14 +149,12 @@ class CampaignRunner {
       this.abortController = null;
     }
 
-    db.prepare(`
-      UPDATE campaigns
-      SET status = 'paused',
-          processing_count = 0,
-          current_phone = NULL,
-          last_activity = ?
-      WHERE id = ?
-    `).run(reason, active.id);
+    updateCampaignFields(active.id, {
+      status: 'paused',
+      processing_count: 0,
+      current_phone: null,
+      last_activity: reason,
+    });
 
     const updated = recalculateCampaignCounts(active.id)!;
     this.emitCampaign(updated);
@@ -202,10 +162,7 @@ class CampaignRunner {
   }
 
   public async resumeCampaign(): Promise<CampaignRow> {
-    const paused = db
-      .prepare(`SELECT * FROM campaigns WHERE status = 'paused' ORDER BY id DESC LIMIT 1`)
-      .get() as CampaignRow | undefined;
-
+    const paused = getActiveCampaignByStatus('paused');
     if (!paused) {
       throw new Error('No paused campaign found to resume.');
     }
@@ -214,12 +171,10 @@ class CampaignRunner {
       throw new Error('WhatsApp is disconnected. Reconnect before resuming the campaign.');
     }
 
-    db.prepare(`
-      UPDATE campaigns
-      SET status = 'running',
-          last_activity = 'Resumed campaign sending'
-      WHERE id = ?
-    `).run(paused.id);
+    updateCampaignFields(paused.id, {
+      status: 'running',
+      last_activity: 'Resumed campaign sending',
+    });
 
     const updated = recalculateCampaignCounts(paused.id)!;
     this.emitCampaign(updated);
@@ -233,10 +188,7 @@ class CampaignRunner {
   }
 
   public async stopCampaign(): Promise<CampaignRow | null> {
-    const target = db
-      .prepare(`SELECT * FROM campaigns WHERE status IN ('running', 'paused') ORDER BY id DESC LIMIT 1`)
-      .get() as CampaignRow | undefined;
-
+    const target = getActiveRunningOrPausedCampaign();
     if (!target) {
       return this.getActiveOrLatestCampaign();
     }
@@ -246,24 +198,14 @@ class CampaignRunner {
       this.abortController = null;
     }
 
-    db.transaction(() => {
-      db.prepare(`
-        UPDATE campaign_messages
-        SET status = 'stopped',
-            processed_at = datetime('now')
-        WHERE campaign_id = ? AND status = 'queued'
-      `).run(target.id);
-
-      db.prepare(`
-        UPDATE campaigns
-        SET status = 'stopped',
-            processing_count = 0,
-            current_phone = NULL,
-            completed_at = datetime('now'),
-            last_activity = 'Campaign stopped by user'
-        WHERE id = ?
-      `).run(target.id);
-    })();
+    stopQueuedMessagesForCampaign(target.id);
+    updateCampaignFields(target.id, {
+      status: 'stopped',
+      processing_count: 0,
+      current_phone: null,
+      completed_at: stampNow(),
+      last_activity: 'Campaign stopped by user',
+    });
 
     this.activeCampaignId = null;
     const updated = recalculateCampaignCounts(target.id)!;
@@ -303,28 +245,20 @@ class CampaignRunner {
 
       try {
         while (!controller.signal.aborted) {
-          const campaign = db
-            .prepare(`SELECT * FROM campaigns WHERE id = ?`)
-            .get(campaignId) as CampaignRow | undefined;
-
+          const campaign = getCampaignById(campaignId);
           if (!campaign || campaign.status !== 'running') {
             break;
           }
 
-          const nextMsg = db
-            .prepare(`SELECT * FROM campaign_messages WHERE campaign_id = ? AND status = 'queued' ORDER BY id ASC LIMIT 1`)
-            .get(campaignId) as CampaignMessageRow | undefined;
-
+          const nextMsg = getNextQueuedMessage(campaignId);
           if (!nextMsg) {
-            db.prepare(`
-              UPDATE campaigns
-              SET status = 'completed',
-                  processing_count = 0,
-                  current_phone = NULL,
-                  completed_at = datetime('now'),
-                  last_activity = 'Campaign completed all queued numbers'
-              WHERE id = ?
-            `).run(campaignId);
+            updateCampaignFields(campaignId, {
+              status: 'completed',
+              processing_count: 0,
+              current_phone: null,
+              completed_at: stampNow(),
+              last_activity: 'Campaign completed all queued numbers',
+            });
             const finalCampaign = recalculateCampaignCounts(campaignId);
             this.emitCampaign(finalCampaign);
             await createLocalBackup('auto').catch(() => {});
@@ -332,27 +266,22 @@ class CampaignRunner {
           }
 
           if (!whatsappManager.isReadyToSend()) {
-            db.prepare(`
-              UPDATE campaigns
-              SET status = 'paused',
-                  processing_count = 0,
-                  current_phone = NULL,
-                  last_activity = 'Paused automatically: WhatsApp disconnected'
-              WHERE id = ?
-            `).run(campaignId);
+            updateCampaignFields(campaignId, {
+              status: 'paused',
+              processing_count: 0,
+              current_phone: null,
+              last_activity: 'Paused automatically: WhatsApp disconnected',
+            });
             const paused = recalculateCampaignCounts(campaignId);
             this.emitCampaign(paused);
             break;
           }
 
-          // Mark processing = 1
-          db.prepare(`
-            UPDATE campaigns
-            SET processing_count = 1,
-                current_phone = ?,
-                last_activity = ?
-            WHERE id = ?
-          `).run(nextMsg.phone_e164, `Sending message to ${nextMsg.phone_e164}...`, campaignId);
+          updateCampaignFields(campaignId, {
+            processing_count: 1,
+            current_phone: nextMsg.phone_e164,
+            last_activity: `Sending message to ${nextMsg.phone_e164}...`,
+          });
 
           this.emitCampaign(recalculateCampaignCounts(campaignId));
 
@@ -367,92 +296,70 @@ class CampaignRunner {
               attachmentType: campaign.attachment_type as 'image' | 'pdf' | 'video' | null,
             });
 
-            db.prepare(`
-              UPDATE campaign_messages
-              SET status = ?,
-                  wa_message_id = ?,
-                  attempts = attempts + 1,
-                  error_message = NULL,
-                  processed_at = datetime('now')
-              WHERE id = ?
-            `).run(result.status, result.waMessageId, nextMsg.id);
+            updateCampaignMessageFields(nextMsg.id, {
+              status: result.status,
+              wa_message_id: result.waMessageId,
+              attempts: nextMsg.attempts + 1,
+              error_message: null,
+              processed_at: stampNow(),
+            });
 
             incrementDailyStat(today, {
               attempted: 1,
               successful: result.status === 'delivered' ? 1 : 0,
             });
 
-            db.prepare(`
-              UPDATE campaigns
-              SET processing_count = 0,
-                  last_activity = ?
-              WHERE id = ?
-            `).run(
-              result.status === 'delivered'
-                ? `Delivered to ${nextMsg.phone_e164}`
-                : `Submitted to ${nextMsg.phone_e164} (awaiting delivery receipt)`,
-              campaignId
-            );
+            updateCampaignFields(campaignId, {
+              processing_count: 0,
+              last_activity:
+                result.status === 'delivered'
+                  ? `Delivered to ${nextMsg.phone_e164}`
+                  : `Submitted to ${nextMsg.phone_e164} (awaiting delivery receipt)`,
+            });
           } catch (err) {
             const errorMsg = err instanceof Error ? err.message : 'Failed to send message';
-            db.prepare(`
-              UPDATE campaign_messages
-              SET status = 'failed',
-                  attempts = attempts + 1,
-                  error_message = ?,
-                  processed_at = datetime('now')
-              WHERE id = ?
-            `).run(errorMsg, nextMsg.id);
+            updateCampaignMessageFields(nextMsg.id, {
+              status: 'failed',
+              attempts: nextMsg.attempts + 1,
+              error_message: errorMsg,
+              processed_at: stampNow(),
+            });
 
             incrementDailyStat(today, { attempted: 1, failed: 1 });
 
-            db.prepare(`
-              UPDATE campaigns
-              SET processing_count = 0,
-                  last_activity = ?
-              WHERE id = ?
-            `).run(`Failed for ${nextMsg.phone_e164}: ${errorMsg}`, campaignId);
+            updateCampaignFields(campaignId, {
+              processing_count: 0,
+              last_activity: `Failed for ${nextMsg.phone_e164}: ${errorMsg}`,
+            });
           }
 
           processedInCurrentRun++;
           const updated = recalculateCampaignCounts(campaignId);
           this.emitCampaign(updated);
 
-          // Check if more queued items remain before waiting
           const moreRemaining = (updated?.remaining_count ?? 0) > 0;
           if (!moreRemaining) {
             continue;
           }
 
-          // Check batch pause rule
           const isBatchBoundary =
             campaign.batch_size > 0 &&
             campaign.batch_pause_seconds > 0 &&
             processedInCurrentRun % campaign.batch_size === 0;
 
           if (isBatchBoundary) {
-            db.prepare(`
-              UPDATE campaigns
-              SET current_phone = NULL,
-                  last_activity = ?
-              WHERE id = ?
-            `).run(
-              `Batch pause: waiting ${campaign.batch_pause_seconds}s after ${campaign.batch_size} messages`,
-              campaignId
-            );
+            updateCampaignFields(campaignId, {
+              current_phone: null,
+              last_activity: `Batch pause: waiting ${campaign.batch_pause_seconds}s after ${campaign.batch_size} messages`,
+            });
             this.emitCampaign(recalculateCampaignCounts(campaignId));
             const continued = await this.interruptibleWait(campaign.batch_pause_seconds, controller.signal);
             if (!continued) break;
           } else {
-            db.prepare(`
-              UPDATE campaigns
-              SET current_phone = NULL,
-                  last_activity = ?
-              WHERE id = ?
-            `).run(
-              `Waiting ${campaign.interval_seconds}s interval before next message`,
-              campaignId
-            );
+            updateCampaignFields(campaignId, {
+              current_phone: null,
+              last_activity: `Waiting ${campaign.interval_seconds}s interval before next message`,
+            });
             this.emitCampaign(recalculateCampaignCounts(campaignId));
             const continued = await this.interruptibleWait(campaign.interval_seconds, controller.signal);
             if (!continued) break;

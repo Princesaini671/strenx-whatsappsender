@@ -7,17 +7,26 @@ import multer from 'multer';
 import Papa from 'papaparse';
 import type { CountryCode } from 'libphonenumber-js';
 import {
+  addContactsBatch,
+  clearAllContacts,
+  clearDraftAttachment,
   createLocalBackup,
-  db,
+  deleteContactById,
+  flushStoreToDisk,
   getAllSettings,
+  getAnalyticsSnapshot,
+  getBackupById,
+  getDraft,
+  getExistingPhoneSet,
+  getPreviouslyMessagedSet,
   getSetting,
+  isAttachmentUsedByCampaign,
+  listContacts,
+  saveDraftAttachment,
+  saveDraftText,
   setSetting,
   setSettingsBulk,
-  type BackupRow,
-  type CampaignRow,
-  type ContactRow,
-  type DraftMessageRow,
-} from './server/db.ts';
+} from './server/store.ts';
 import { addSseClient } from './server/events.ts';
 import { DATA_DIR, UPLOADS_DIR, ensureDataDirectories } from './server/paths.ts';
 import { getCountryOptions, processBatchPhoneLines } from './server/phone.ts';
@@ -71,33 +80,6 @@ function detectAttachmentType(ext: string, mime: string): 'image' | 'pdf' | 'vid
   if (ext === '.pdf' || mime === 'application/pdf') return 'pdf';
   if (ext === '.mp4' || mime.startsWith('video/')) return 'video';
   return 'image';
-}
-
-function getExistingPhoneSet(): Set<string> {
-  const rows = db.prepare(`SELECT phone_e164 FROM contacts`).all() as Array<{ phone_e164: string }>;
-  return new Set(rows.map((r) => r.phone_e164));
-}
-
-function insertValidatedEntries(
-  entries: ReturnType<typeof processBatchPhoneLines>['entries'],
-  source: 'manual' | 'paste' | 'csv'
-): { inserted: number } {
-  const insertStmt = db.prepare(`
-    INSERT OR IGNORE INTO contacts (raw_input, phone_e164, country_code, source, is_valid, validation_error)
-    VALUES (?, ?, ?, ?, 1, NULL)
-  `);
-
-  let inserted = 0;
-  const tx = db.transaction(() => {
-    for (const entry of entries) {
-      if (entry.isValid && !entry.isDuplicate && entry.e164) {
-        const res = insertStmt.run(entry.raw, entry.e164, entry.countryCode, source);
-        if (res.changes > 0) inserted++;
-      }
-    }
-  });
-  tx();
-  return { inserted };
 }
 
 export async function createAppServer(): Promise<express.Express> {
@@ -202,13 +184,8 @@ export async function createAppServer(): Promise<express.Express> {
 
   // Contacts / Phone numbers
   app.get('/api/contacts', (_req, res) => {
-    const contacts = db
-      .prepare(`SELECT * FROM contacts ORDER BY id DESC`)
-      .all() as ContactRow[];
-    const sentRows = db
-      .prepare(`SELECT DISTINCT phone_e164 FROM campaign_messages WHERE status IN ('submitted', 'delivered')`)
-      .all() as Array<{ phone_e164: string }>;
-    const messagedSet = new Set(sentRows.map((r) => r.phone_e164));
+    const contacts = listContacts();
+    const messagedSet = getPreviouslyMessagedSet();
 
     res.json({
       contacts: contacts.map((c) => ({
@@ -234,7 +211,7 @@ export async function createAppServer(): Promise<express.Express> {
 
     const existing = getExistingPhoneSet();
     const parsed = processBatchPhoneLines(lines, cc, existing);
-    const { inserted } = insertValidatedEntries(parsed.entries, 'manual');
+    const inserted = addContactsBatch(parsed.entries, 'manual');
 
     res.json({
       inserted,
@@ -260,7 +237,7 @@ export async function createAppServer(): Promise<express.Express> {
 
     const existing = getExistingPhoneSet();
     const parsed = processBatchPhoneLines(lines, cc, existing);
-    const { inserted } = insertValidatedEntries(parsed.entries, 'paste');
+    const inserted = addContactsBatch(parsed.entries, 'paste');
 
     res.json({
       totalLines: lines.length,
@@ -286,7 +263,6 @@ export async function createAppServer(): Promise<express.Express> {
 
     const headers = parsed.meta.fields || [];
     if (headers.length === 0) {
-      // Fallback: headerless single column CSV
       const rawLines = csvText
         .split(/\r?\n/)
         .map((l) => l.split(',')[0]?.trim() || '')
@@ -365,7 +341,7 @@ export async function createAppServer(): Promise<express.Express> {
 
     const existing = getExistingPhoneSet();
     const summary = processBatchPhoneLines(values, cc, existing);
-    const { inserted } = insertValidatedEntries(summary.entries, 'csv');
+    const inserted = addContactsBatch(summary.entries, 'csv');
 
     res.json({
       totalRows: values.length,
@@ -377,19 +353,18 @@ export async function createAppServer(): Promise<express.Express> {
   });
 
   app.delete('/api/contacts/:id', (req, res) => {
-    const id = Number(req.params.id);
-    db.prepare(`DELETE FROM contacts WHERE id = ?`).run(id);
+    deleteContactById(Number(req.params.id));
     res.json({ ok: true });
   });
 
   app.delete('/api/contacts', (_req, res) => {
-    db.prepare(`DELETE FROM contacts`).run();
+    clearAllContacts();
     res.json({ ok: true });
   });
 
   // Draft Message & Attachments
   app.get('/api/draft', (_req, res) => {
-    const draft = db.prepare(`SELECT * FROM draft_message WHERE id = 1`).get() as DraftMessageRow;
+    const draft = getDraft();
     res.json({
       ...draft,
       attachmentUrl: draft.attachment_path
@@ -400,13 +375,7 @@ export async function createAppServer(): Promise<express.Express> {
 
   app.put('/api/draft', (req, res) => {
     const { bodyText } = req.body as { bodyText?: string };
-    db.prepare(`
-      UPDATE draft_message
-      SET body_text = ?,
-          updated_at = datetime('now')
-      WHERE id = 1
-    `).run(bodyText ?? '');
-    const draft = db.prepare(`SELECT * FROM draft_message WHERE id = 1`).get() as DraftMessageRow;
+    const draft = saveDraftText(bodyText ?? '');
     res.json({
       ...draft,
       attachmentUrl: draft.attachment_path
@@ -421,15 +390,9 @@ export async function createAppServer(): Promise<express.Express> {
       return;
     }
 
-    // Remove previous draft attachment if not referenced by any campaign
-    const prev = db.prepare(`SELECT attachment_path FROM draft_message WHERE id = 1`).get() as {
-      attachment_path: string | null;
-    };
-    if (prev?.attachment_path && fs.existsSync(prev.attachment_path)) {
-      const usedInCampaign = db
-        .prepare(`SELECT 1 FROM campaigns WHERE attachment_path = ? LIMIT 1`)
-        .get(prev.attachment_path);
-      if (!usedInCampaign) {
+    const prev = getDraft();
+    if (prev.attachment_path && fs.existsSync(prev.attachment_path)) {
+      if (!isAttachmentUsedByCampaign(prev.attachment_path)) {
         try {
           fs.unlinkSync(prev.attachment_path);
         } catch {
@@ -441,18 +404,14 @@ export async function createAppServer(): Promise<express.Express> {
     const ext = path.extname(req.file.originalname).toLowerCase();
     const type = detectAttachmentType(ext, req.file.mimetype);
 
-    db.prepare(`
-      UPDATE draft_message
-      SET attachment_path = ?,
-          attachment_name = ?,
-          attachment_mime = ?,
-          attachment_size = ?,
-          attachment_type = ?,
-          updated_at = datetime('now')
-      WHERE id = 1
-    `).run(req.file.path, req.file.originalname, req.file.mimetype, req.file.size, type);
+    const draft = saveDraftAttachment({
+      attachmentPath: req.file.path,
+      attachmentName: req.file.originalname,
+      attachmentMime: req.file.mimetype,
+      attachmentSize: req.file.size,
+      attachmentType: type,
+    });
 
-    const draft = db.prepare(`SELECT * FROM draft_message WHERE id = 1`).get() as DraftMessageRow;
     res.json({
       ...draft,
       attachmentUrl: `/api/uploads/${path.basename(req.file.path)}`,
@@ -460,14 +419,9 @@ export async function createAppServer(): Promise<express.Express> {
   });
 
   app.delete('/api/draft/attachment', (_req, res) => {
-    const prev = db.prepare(`SELECT attachment_path FROM draft_message WHERE id = 1`).get() as {
-      attachment_path: string | null;
-    };
-    if (prev?.attachment_path && fs.existsSync(prev.attachment_path)) {
-      const usedInCampaign = db
-        .prepare(`SELECT 1 FROM campaigns WHERE attachment_path = ? LIMIT 1`)
-        .get(prev.attachment_path);
-      if (!usedInCampaign) {
+    const prev = getDraft();
+    if (prev.attachment_path && fs.existsSync(prev.attachment_path)) {
+      if (!isAttachmentUsedByCampaign(prev.attachment_path)) {
         try {
           fs.unlinkSync(prev.attachment_path);
         } catch {
@@ -476,18 +430,7 @@ export async function createAppServer(): Promise<express.Express> {
       }
     }
 
-    db.prepare(`
-      UPDATE draft_message
-      SET attachment_path = NULL,
-          attachment_name = NULL,
-          attachment_mime = NULL,
-          attachment_size = NULL,
-          attachment_type = NULL,
-          updated_at = datetime('now')
-      WHERE id = 1
-    `).run();
-
-    const draft = db.prepare(`SELECT * FROM draft_message WHERE id = 1`).get() as DraftMessageRow;
+    const draft = clearDraftAttachment();
     res.json({ ...draft, attachmentUrl: null });
   });
 
@@ -571,66 +514,11 @@ export async function createAppServer(): Promise<express.Express> {
     res.json({ campaign });
   });
 
-  // Analytics & Backups
+  // Analytics & Local File Backups
   app.get('/api/analytics', (_req, res) => {
-    const totals = db
-      .prepare(`
-        SELECT
-          COUNT(*) as total_messages,
-          SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) as delivered_messages,
-          SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) as submitted_messages,
-          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_messages,
-          SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) as remaining_messages
-        FROM campaign_messages
-      `)
-      .get() as {
-      total_messages: number;
-      delivered_messages: number | null;
-      submitted_messages: number | null;
-      failed_messages: number | null;
-      remaining_messages: number | null;
-    };
-
-    const campaigns = db
-      .prepare(`SELECT * FROM campaigns ORDER BY id DESC LIMIT 30`)
-      .all() as CampaignRow[];
-
-    const dailyStats = db
-      .prepare(`SELECT * FROM daily_stats ORDER BY date DESC LIMIT 14`)
-      .all() as Array<{
-      date: string;
-      total_attempted: number;
-      successful: number;
-      failed: number;
-    }>;
-
-    const backups = db
-      .prepare(`SELECT * FROM backups ORDER BY id DESC LIMIT 15`)
-      .all() as BackupRow[];
-
-    const total = totals.total_messages || 0;
-    const delivered = totals.delivered_messages || 0;
-    const submitted = totals.submitted_messages || 0;
-    const failed = totals.failed_messages || 0;
-    const remaining = totals.remaining_messages || 0;
-    const finalized = delivered + failed;
-
-    const successPercentage = finalized > 0 ? Number(((delivered / finalized) * 100).toFixed(1)) : 0;
-    const failurePercentage = finalized > 0 ? Number(((failed / finalized) * 100).toFixed(1)) : 0;
-
+    const snapshot = getAnalyticsSnapshot();
     res.json({
-      summary: {
-        totalMessages: total,
-        successfulMessages: delivered,
-        submittedMessages: submitted,
-        failedMessages: failed,
-        remainingMessages: remaining,
-        successPercentage,
-        failurePercentage,
-      },
-      campaigns,
-      dailyStats: dailyStats.reverse(),
-      backups,
+      ...snapshot,
       dataDir: DATA_DIR,
     });
   });
@@ -646,7 +534,7 @@ export async function createAppServer(): Promise<express.Express> {
 
   app.get('/api/backups/:id/download', (req, res) => {
     const id = Number(req.params.id);
-    const row = db.prepare(`SELECT * FROM backups WHERE id = ?`).get(id) as BackupRow | undefined;
+    const row = getBackupById(id);
     if (!row || !fs.existsSync(row.file_path)) {
       res.status(404).json({ error: 'Backup file not found' });
       return;
@@ -718,7 +606,7 @@ export async function startServer(port = Number(process.env.PORT || 3000)): Prom
     close: async () => {
       clearInterval(backupInterval);
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      db.close();
+      flushStoreToDisk();
     },
   };
 }

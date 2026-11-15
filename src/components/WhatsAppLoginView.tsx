@@ -489,7 +489,7 @@ export function WhatsAppLoginView({
           <div className="lg:col-span-5 rounded-xl border border-[#E2E8E4] bg-white p-6 space-y-3">
             <h3 className="text-sm font-semibold text-[#0F1D17]">How Official Cloud API Works</h3>
             <ul className="space-y-2.5 text-xs text-[#475A51] leading-relaxed">
-              <li>1. Credentials are verified live against Meta Graph API and stored locally in SQLite.</li>
+              <li>1. Credentials are verified live against Meta Graph API and stored locally on this device.</li>
               <li>2. Attachments (JPG, PNG, PDF, MP4) are uploaded via Meta Media API before dispatch.</li>
               <li>
                 3. Graph API confirms server submission (`submitted`). Full delivery receipts require a public Meta webhook endpoint.

@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "TrialKey": {
+      "title": "Trial Key (24-Hour License)",
+      "description": "A time-limited 24-hour login credential stored in the trial_key collection.",
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique login username matching document ID."
+        },
+        "passwordHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 hex digest of the account password."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether the trial key is currently enabled."
+        },
+        "durationHours": {
+          "type": "number",
+          "description": "Fixed 24-hour validity window."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "activatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp recorded on first login to start the 24-hour clock."
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "UID of the admin who created the key."
+        }
+      },
+      "required": ["username", "passwordHash", "active", "durationHours", "createdAt", "createdBy"]
+    },
+    "PermanentKey": {
+      "title": "Permanent Key (Lifetime License)",
+      "description": "A non-expiring permanent login credential stored in the permanent collection.",
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique login username matching document ID."
+        },
+        "passwordHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 hex digest of the account password."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether the permanent key is currently enabled."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "UID of the admin who created the key."
+        }
+      },
+      "required": ["username", "passwordHash", "active", "createdAt", "createdBy"]
+    },
+    "AdminUser": {
+      "title": "Admin User",
+      "description": "Authorized administrator UID allowed to manage license keys.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/trial_key/{keyId}": {
+      "schema": { "$ref": "#/entities/TrialKey" },
+      "description": "24-hour trial username/password login keys."
+    },
+    "/permanent/{keyId}": {
+      "schema": { "$ref": "#/entities/PermanentKey" },
+      "description": "Permanent non-expiring username/password login keys."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Registered administrator accounts."
+    }
+  }
+}

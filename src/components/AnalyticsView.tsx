@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import {
   CheckCircle2,
-  Database,
   Download,
+  FileJson,
   HardDrive,
   RefreshCw,
   XCircle,
@@ -76,7 +76,7 @@ export function AnalyticsView({
         <div>
           <h2 className="text-lg font-semibold text-[#0F1D17]">Analytics & Local Backups</h2>
           <p className="text-sm text-[#475A51]">
-            Campaign performance metrics, daily delivery statistics, and SQLite database backups.
+            Campaign performance metrics, daily delivery statistics, and local JSON file backups.
           </p>
         </div>
 
@@ -333,14 +333,14 @@ export function AnalyticsView({
         )}
       </div>
 
-      {/* Automatic Local SQLite Backup */}
+      {/* Automatic Local File Backup */}
       <div className="rounded-xl border border-[#E2E8E4] bg-white p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E2E8E4] pb-4">
           <div className="flex items-center gap-3">
-            <Database className="h-5 w-5 text-[#0D8A4E]" />
+            <FileJson className="h-5 w-5 text-[#0D8A4E]" />
             <div>
               <h3 className="text-sm font-semibold text-[#0F1D17]">
-                SQLite Database & Automatic Local Backups
+                Local Data & Automatic File Backups
               </h3>
               <p className="text-xs text-[#73857C] font-mono">
                 Data directory: {analytics?.dataDir || './data'}
@@ -378,7 +378,7 @@ export function AnalyticsView({
         )}
 
         {backups.length === 0 ? (
-          <p className="text-xs text-[#73857C]">No local SQLite backups created yet.</p>
+          <p className="text-xs text-[#73857C]">No local backups created yet.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
@@ -408,7 +408,7 @@ export function AnalyticsView({
                         className="inline-flex items-center gap-1 text-[#0D8A4E] font-medium hover:underline"
                       >
                         <Download className="h-3.5 w-3.5" />
-                        Download .db
+                        Download .json
                       </a>
                     </td>
                   </tr>

@@ -1,0 +1,52 @@
+{
+  "nextIds": {
+    "contact": 3,
+    "campaign": 1,
+    "campaignMessage": 1,
+    "backup": 3
+  },
+  "settings": {
+    "interval_seconds": "30",
+    "batch_size": "10",
+    "batch_pause_seconds": "30",
+    "default_country_code": "US",
+    "skip_already_messaged": "1",
+    "connection_mode": "qr",
+    "cloud_api_phone_id": "",
+    "cloud_api_token": "",
+    "auto_backup_enabled": "1",
+    "last_backup_at": "2026-11-15T04:20:16.907Z"
+  },
+  "contacts": [],
+  "draft": {
+    "id": 1,
+    "body_text": "",
+    "attachment_path": null,
+    "attachment_name": null,
+    "attachment_mime": null,
+    "attachment_size": null,
+    "attachment_type": null,
+    "updated_at": "2026-11-15 04:20:14"
+  },
+  "campaigns": [],
+  "campaignMessages": [],
+  "dailyStats": {},
+  "backups": [
+    {
+      "id": 1,
+      "filename": "strenx-backup-2026-11-15T04-20-15-587Z.json",
+      "file_path": "/app/applet/data/backups/strenx-backup-2026-11-15T04-20-15-587Z.json",
+      "size_bytes": 757,
+      "trigger_type": "auto",
+      "created_at": "2026-11-15 04:20:15"
+    },
+    {
+      "id": 2,
+      "filename": "strenx-backup-2026-11-15T04-20-16-907Z.json",
+      "file_path": "/app/applet/data/backups/strenx-backup-2026-11-15T04-20-16-907Z.json",
+      "size_bytes": 1562,
+      "trigger_type": "manual",
+      "created_at": "2026-11-15 04:20:16"
+    }
+  ]
+}

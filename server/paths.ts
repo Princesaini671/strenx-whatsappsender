@@ -5,7 +5,7 @@ export const DATA_DIR = process.env.STRENX_DATA_DIR
   ? path.resolve(process.env.STRENX_DATA_DIR)
   : path.resolve(process.cwd(), 'data');
 
-export const DB_PATH = path.join(DATA_DIR, 'strenx.db');
+export const STATE_FILE_PATH = path.join(DATA_DIR, 'strenx-data.json');
 export const SESSION_DIR = path.join(DATA_DIR, 'wa-session');
 export const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 export const BACKUPS_DIR = path.join(DATA_DIR, 'backups');

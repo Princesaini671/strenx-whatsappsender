@@ -2,11 +2,21 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
   BarChart3,
+  Clock,
+  Infinity as InfinityIcon,
+  LogOut,
   MessageSquareText,
   QrCode,
   Users,
 } from 'lucide-react';
 import { api } from './api.ts';
+import {
+  clearLocalSession,
+  loadLocalSession,
+  saveLocalSession,
+  verifySessionWithServer,
+  type ActiveLicenseSession,
+} from './auth/licenseService.ts';
 import type {
   AnalyticsData,
   AppSettings,
@@ -17,6 +27,7 @@ import type {
   DraftMessage,
   WhatsAppStatus,
 } from './types.ts';
+import { LoginScreen } from './components/LoginScreen.tsx';
 import { WhatsAppLoginView } from './components/WhatsAppLoginView.tsx';
 import { PhoneNumbersView } from './components/PhoneNumbersView.tsx';
 import { ComposerSpeedView } from './components/ComposerSpeedView.tsx';
@@ -69,7 +80,21 @@ const DEFAULT_SETTINGS: AppSettings = {
   last_backup_at: '',
 };
 
+function formatTrialCountdown(expiresAtMs: number | null): string {
+  if (!expiresAtMs) return '24h Trial';
+  const diff = expiresAtMs - Date.now();
+  if (diff <= 0) return 'Expired';
+  const hrs = Math.floor(diff / 3600000);
+  const mins = Math.floor((diff % 3600000) / 60000);
+  return `${hrs}h ${mins}m left`;
+}
+
 export default function App() {
+  const [authChecking, setAuthChecking] = useState(true);
+  const [licenseSession, setLicenseSession] = useState<ActiveLicenseSession | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [, setTick] = useState(0);
+
   const [activeNav, setActiveNav] = useState<NavSection>('login');
   const [waStatus, setWaStatus] = useState<WhatsAppStatus>(DEFAULT_WA_STATUS);
   const [countries, setCountries] = useState<CountryOption[]>([]);
@@ -81,6 +106,62 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [initialLoaded, setInitialLoaded] = useState(false);
+
+  // Verify saved license session against Firebase on mount
+  useEffect(() => {
+    void (async () => {
+      const saved = loadLocalSession();
+      if (!saved) {
+        setAuthChecking(false);
+        return;
+      }
+
+      const check = await verifySessionWithServer(saved);
+      if (!check.valid) {
+        clearLocalSession();
+        setLicenseSession(null);
+        setAuthNotice(check.reason || 'Session expired. Please sign in again.');
+      } else {
+        const finalSession = check.updatedSession || saved;
+        if (check.updatedSession) saveLocalSession(check.updatedSession);
+        setLicenseSession(finalSession);
+      }
+      setAuthChecking(false);
+    })();
+  }, []);
+
+  // Periodic 24-hour trial expiration check & live countdown refresh
+  useEffect(() => {
+    if (!licenseSession) return;
+
+    const timer = setInterval(() => {
+      setTick((t) => t + 1);
+      if (
+        licenseSession.licenseType === 'trial_key' &&
+        licenseSession.expiresAtMs &&
+        Date.now() >= licenseSession.expiresAtMs
+      ) {
+        clearLocalSession();
+        setLicenseSession(null);
+        setAuthNotice('Your 24-hour trial key has expired.');
+      }
+    }, 15000);
+
+    const serverCheckTimer = setInterval(() => {
+      void verifySessionWithServer(licenseSession).then((res) => {
+        if (!res.valid) {
+          clearLocalSession();
+          setLicenseSession(null);
+          setAuthNotice(res.reason || 'Your account session is no longer active.');
+        }
+      });
+    }, 5 * 60 * 1000);
+
+    return () => {
+      clearInterval(timer);
+      clearInterval(serverCheckTimer);
+    };
+  }, [licenseSession]);
 
   const refreshContacts = useCallback(async () => {
     const res = await api.getContacts();
@@ -107,6 +188,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!licenseSession) return;
+
     void (async () => {
       try {
         const [wa, countryList, contactData, draftData, settingsData, campData, analyticsData] =
@@ -132,10 +215,12 @@ export default function App() {
         setInitialLoaded(true);
       }
     })();
-  }, []);
+  }, [licenseSession]);
 
   // Subscribe to Server-Sent Events for real-time QR & campaign updates
   useEffect(() => {
+    if (!licenseSession) return;
+
     const source = new EventSource('/api/events');
 
     source.addEventListener('whatsapp:status', (event) => {
@@ -166,7 +251,7 @@ export default function App() {
     return () => {
       source.close();
     };
-  }, [statusFilter, refreshAnalytics, refreshContacts]);
+  }, [licenseSession, statusFilter, refreshAnalytics, refreshContacts]);
 
   const handleStatusFilterChange = (nextFilter: string) => {
     setStatusFilter(nextFilter);
@@ -177,6 +262,32 @@ export default function App() {
     const next = await api.saveSettings({ default_country_code: code });
     setSettings(next);
   };
+
+  const handleLogout = () => {
+    clearLocalSession();
+    setLicenseSession(null);
+    setAuthNotice(null);
+  };
+
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-[#F6F8F7] flex items-center justify-center p-6">
+        <div className="text-sm text-[#475A51]">Verifying Firebase license session...</div>
+      </div>
+    );
+  }
+
+  if (!licenseSession) {
+    return (
+      <LoginScreen
+        notice={authNotice}
+        onAuthenticated={(session) => {
+          setAuthNotice(null);
+          setLicenseSession(session);
+        }}
+      />
+    );
+  }
 
   const activeNavMeta = NAV_ITEMS.find((n) => n.id === activeNav)!;
 
@@ -234,7 +345,7 @@ export default function App() {
           </nav>
         </div>
 
-        {/* Bottom Real Connection Status & Workspace Readiness */}
+        {/* Bottom Real Connection Status & Account License Info */}
         <div className="hidden lg:block border-t border-[#E2E8E4] p-4 space-y-3">
           <div className="flex items-center justify-between text-xs">
             <span className="text-[#73857C]">WhatsApp Status</span>
@@ -272,9 +383,32 @@ export default function App() {
             </p>
           )}
 
-          <div className="border-t border-[#EEF2EF] pt-2.5 flex items-center justify-between text-xs text-[#73857C]">
-            <span>Local SQLite</span>
-            <span className="font-mono text-[#475A51]">Offline Ready</span>
+          <div className="border-t border-[#EEF2EF] pt-2.5 space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-mono font-medium text-[#0F1D17] truncate">
+                {licenseSession.username}
+              </span>
+              {licenseSession.licenseType === 'permanent' ? (
+                <span className="inline-flex items-center gap-1 text-[#0D8A4E] font-medium whitespace-nowrap">
+                  <InfinityIcon className="h-3.5 w-3.5" />
+                  Permanent
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 font-mono text-amber-700 font-medium whitespace-nowrap tabular-nums">
+                  <Clock className="h-3 w-3" />
+                  {formatTrialCountdown(licenseSession.expiresAtMs)}
+                </span>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#D4DDD8] bg-white px-3 py-1.5 text-xs font-medium text-[#475A51] hover:bg-[#F6F8F7] hover:text-[#0F1D17] cursor-pointer"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Sign Out
+            </button>
           </div>
         </div>
       </aside>

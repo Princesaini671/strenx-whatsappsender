@@ -11,7 +11,7 @@ import {
   Smile,
   Trash2,
 } from 'lucide-react';
-import { api } from '../api.ts';
+import { api, apiUrl } from '../api.ts';
 import type { AppSettings, DraftMessage } from '../types.ts';
 
 interface ComposerSpeedViewProps {
@@ -357,7 +357,7 @@ export function ComposerSpeedView({
                 <div className="ml-auto max-w-[90%] rounded-xl rounded-tr-xs bg-[#D9FDD3] p-2.5 text-sm text-[#111B21] shadow-xs space-y-2">
                   {draft.attachmentUrl && draft.attachment_type === 'image' && (
                     <img
-                      src={draft.attachmentUrl}
+                      src={apiUrl(draft.attachmentUrl)}
                       alt={draft.attachment_name || 'Attachment preview'}
                       className="max-h-56 w-full rounded-lg object-cover bg-white"
                       referrerPolicy="no-referrer"
@@ -366,7 +366,7 @@ export function ComposerSpeedView({
 
                   {draft.attachmentUrl && draft.attachment_type === 'video' && (
                     <video
-                      src={draft.attachmentUrl}
+                      src={apiUrl(draft.attachmentUrl)}
                       controls
                       className="max-h-56 w-full rounded-lg bg-black"
                     />
@@ -386,7 +386,7 @@ export function ComposerSpeedView({
                         </div>
                       </div>
                       <iframe
-                        src={draft.attachmentUrl}
+                        src={apiUrl(draft.attachmentUrl)}
                         title="PDF attachment preview"
                         className="h-36 w-full rounded border border-[#E2E8E4] bg-white"
                       />

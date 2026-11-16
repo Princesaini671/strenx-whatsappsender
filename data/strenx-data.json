@@ -3,7 +3,7 @@
     "contact": 3,
     "campaign": 1,
     "campaignMessage": 1,
-    "backup": 3
+    "backup": 4
   },
   "settings": {
     "interval_seconds": "30",
@@ -15,7 +15,7 @@
     "cloud_api_phone_id": "",
     "cloud_api_token": "",
     "auto_backup_enabled": "1",
-    "last_backup_at": "2026-11-15T04:20:16.907Z"
+    "last_backup_at": "2026-11-16T02:50:05.241Z"
   },
   "contacts": [],
   "draft": {
@@ -47,6 +47,14 @@
       "size_bytes": 1562,
       "trigger_type": "manual",
       "created_at": "2026-11-15 04:20:16"
+    },
+    {
+      "id": 3,
+      "filename": "strenx-backup-2026-11-16T02-50-05-241Z.json",
+      "file_path": "/app/applet/data/backups/strenx-backup-2026-11-16T02-50-05-241Z.json",
+      "size_bytes": 1348,
+      "trigger_type": "auto",
+      "created_at": "2026-11-16 02:50:05"
     }
   ]
 }

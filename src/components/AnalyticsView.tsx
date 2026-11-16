@@ -7,7 +7,7 @@ import {
   RefreshCw,
   XCircle,
 } from 'lucide-react';
-import { api } from '../api.ts';
+import { api, apiUrl } from '../api.ts';
 import type { AnalyticsData, AppSettings } from '../types.ts';
 
 interface AnalyticsViewProps {
@@ -404,7 +404,7 @@ export function AnalyticsView({
                     </td>
                     <td className="px-4 py-2 text-right">
                       <a
-                        href={`/api/backups/${b.id}/download`}
+                        href={apiUrl(`/api/backups/${b.id}/download`)}
                         className="inline-flex items-center gap-1 text-[#0D8A4E] font-medium hover:underline"
                       >
                         <Download className="h-3.5 w-3.5" />

@@ -9,7 +9,7 @@ import {
   QrCode,
   Users,
 } from 'lucide-react';
-import { api } from './api.ts';
+import { api, apiUrl, testBackendHealth } from './api.ts';
 import {
   clearLocalSession,
   loadLocalSession,
@@ -106,6 +106,8 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [initialLoaded, setInitialLoaded] = useState(false);
+  const [backendReachable, setBackendReachable] = useState(true);
+  const [backendVersion, setBackendVersion] = useState(0);
 
   // Verify saved license session against Firebase on mount
   useEffect(() => {
@@ -192,6 +194,13 @@ export default function App() {
 
     void (async () => {
       try {
+        const health = await testBackendHealth();
+        if (!health.ok) {
+          setBackendReachable(false);
+          return;
+        }
+        setBackendReachable(true);
+
         const [wa, countryList, contactData, draftData, settingsData, campData, analyticsData] =
           await Promise.all([
             api.getWhatsAppStatus(),
@@ -211,17 +220,19 @@ export default function App() {
         setCampaign(campData.campaign);
         setCampaignMessages(campData.messages);
         setAnalytics(analyticsData);
+      } catch {
+        setBackendReachable(false);
       } finally {
         setInitialLoaded(true);
       }
     })();
-  }, [licenseSession]);
+  }, [licenseSession, backendVersion]);
 
   // Subscribe to Server-Sent Events for real-time QR & campaign updates
   useEffect(() => {
-    if (!licenseSession) return;
+    if (!licenseSession || !backendReachable) return;
 
-    const source = new EventSource('/api/events');
+    const source = new EventSource(apiUrl('/api/events'));
 
     source.addEventListener('whatsapp:status', (event) => {
       try {
@@ -251,7 +262,7 @@ export default function App() {
     return () => {
       source.close();
     };
-  }, [licenseSession, statusFilter, refreshAnalytics, refreshContacts]);
+  }, [licenseSession, backendReachable, backendVersion, statusFilter, refreshAnalytics, refreshContacts]);
 
   const handleStatusFilterChange = (nextFilter: string) => {
     setStatusFilter(nextFilter);
@@ -459,8 +470,10 @@ export default function App() {
                 <WhatsAppLoginView
                   status={waStatus}
                   settings={settings}
+                  backendReachable={backendReachable}
                   onStatusChange={setWaStatus}
                   onSettingsRefresh={refreshSettings}
+                  onBackendReconnected={() => setBackendVersion((v) => v + 1)}
                 />
               )}
 

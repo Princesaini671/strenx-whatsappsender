@@ -7,18 +7,11 @@ import {
   LogOut,
   QrCode,
   RefreshCw,
-  Server,
   ShieldCheck,
   Smartphone,
   Unplug,
 } from 'lucide-react';
-import {
-  BackendUnavailableError,
-  api,
-  getApiBaseUrl,
-  setApiBaseUrl,
-  testBackendHealth,
-} from '../api.ts';
+import { api } from '../api.ts';
 import type { AppSettings, WhatsAppStatus } from '../types.ts';
 
 interface WhatsAppLoginViewProps {
@@ -49,36 +42,6 @@ export function WhatsAppLoginView({
   const [phoneId, setPhoneId] = useState(settings?.cloud_api_phone_id || '');
   const [accessToken, setAccessToken] = useState(settings?.cloud_api_token || '');
 
-  const [showServerPanel, setShowServerPanel] = useState(false);
-  const [backendUrlInput, setBackendUrlInput] = useState(getApiBaseUrl());
-  const [testingBackend, setTestingBackend] = useState(false);
-  const [backendTestMsg, setBackendTestMsg] = useState<string | null>(null);
-
-  const handleSaveBackendUrl = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setTestingBackend(true);
-    setBackendTestMsg(null);
-    const check = await testBackendHealth(backendUrlInput);
-    if (!check.ok) {
-      setBackendTestMsg(check.error || 'Could not reach Strenx backend server at that URL.');
-      setTestingBackend(false);
-      return;
-    }
-    setApiBaseUrl(backendUrlInput);
-    setTestingBackend(false);
-    setShowServerPanel(false);
-    setErrorMsg(null);
-    setSuccessMsg('Connected to Strenx Node.js backend server.');
-    onBackendReconnected();
-  };
-
-  const handleResetBackendUrl = () => {
-    setApiBaseUrl('');
-    setBackendUrlInput('');
-    setBackendTestMsg(null);
-    onBackendReconnected();
-  };
-
   const handleConnectQR = async () => {
     setBusy(true);
     setErrorMsg(null);
@@ -88,9 +51,6 @@ export function WhatsAppLoginView({
       onStatusChange(next);
       onSettingsRefresh();
     } catch (err) {
-      if (err instanceof BackendUnavailableError) {
-        setShowServerPanel(true);
-      }
       setErrorMsg(err instanceof Error ? err.message : 'Unable to start WhatsApp QR session');
     } finally {
       setBusy(false);
@@ -180,106 +140,51 @@ export function WhatsAppLoginView({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex items-center gap-1 rounded-lg bg-[#EDF2EF] p-1">
           <button
             type="button"
-            onClick={() => setShowServerPanel((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#D4DDD8] bg-white px-3 py-2 text-xs font-medium text-[#475A51] hover:text-[#0F1D17] whitespace-nowrap shrink-0 cursor-pointer"
+            onClick={() => setActiveTab('qr')}
+            className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              activeTab === 'qr'
+                ? 'bg-white text-[#0F1D17] shadow-xs'
+                : 'text-[#475A51] hover:text-[#0F1D17]'
+            }`}
           >
-            <Server className="h-3.5 w-3.5" />
-            Server URL
+            <QrCode className="h-3.5 w-3.5" />
+            QR Code Login
           </button>
-
-          <div className="inline-flex items-center gap-1 rounded-lg bg-[#EDF2EF] p-1">
-            <button
-              type="button"
-              onClick={() => setActiveTab('qr')}
-              className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'qr'
-                  ? 'bg-white text-[#0F1D17] shadow-xs'
-                  : 'text-[#475A51] hover:text-[#0F1D17]'
-              }`}
-            >
-              <QrCode className="h-3.5 w-3.5" />
-              QR Code Login
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('cloud_api')}
-              className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'cloud_api'
-                  ? 'bg-white text-[#0F1D17] shadow-xs'
-                  : 'text-[#475A51] hover:text-[#0F1D17]'
-              }`}
-            >
-              <KeyRound className="h-3.5 w-3.5" />
-              Official Cloud API
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('cloud_api')}
+            className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              activeTab === 'cloud_api'
+                ? 'bg-white text-[#0F1D17] shadow-xs'
+                : 'text-[#475A51] hover:text-[#0F1D17]'
+            }`}
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            Official Cloud API
+          </button>
         </div>
       </div>
 
-      {(!backendReachable || showServerPanel) && (
-        <form
-          onSubmit={handleSaveBackendUrl}
-          className="rounded-xl border border-amber-200 bg-amber-50/70 p-5 space-y-3"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-2.5">
-              <Server className="mt-0.5 h-4 w-4 shrink-0 text-amber-800" />
-              <div className="space-y-1 text-xs text-amber-950">
-                <p className="font-semibold">
-                  {!backendReachable
-                    ? 'Node.js Backend Server Required (404 on Static Hosting)'
-                    : 'Configure Strenx Backend Server URL'}
-                </p>
-                <p className="leading-relaxed text-amber-900">
-                  Static web hosts only serve the browser UI and cannot run WhatsApp QR sessions. Run the Strenx Node.js server (e.g. <span className="font-mono">npm run build &amp;&amp; NODE_ENV=production npm start</span> on a VPS, Cloud Run, Render, or locally at <span className="font-mono">http://localhost:3000</span>) and enter its URL below.
-                </p>
-              </div>
-            </div>
-            {backendReachable && (
-              <button
-                type="button"
-                onClick={() => setShowServerPanel(false)}
-                className="text-xs text-amber-900 hover:underline cursor-pointer shrink-0"
-              >
-                Close
-              </button>
-            )}
+      {!backendReachable && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs text-amber-950">
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700" />
+            <span>
+              Same-domain API health check (<span className="font-mono">/api/health</span>) did not respond. Retry connecting to the backend service.
+            </span>
           </div>
-
-          {backendTestMsg && (
-            <p className="text-xs font-medium text-red-700">{backendTestMsg}</p>
-          )}
-
-          <div className="flex flex-wrap items-center gap-2.5">
-            <input
-              type="url"
-              value={backendUrlInput}
-              onChange={(e) => setBackendUrlInput(e.target.value)}
-              placeholder="http://localhost:3000 or https://your-strenx-server.com"
-              className="flex-1 min-w-[240px] rounded-lg border border-amber-300 bg-white px-3.5 py-2 font-mono text-xs text-[#0F1D17] focus:border-[#0D8A4E] focus:outline-none"
-            />
-            <button
-              type="submit"
-              disabled={testingBackend || !backendUrlInput.trim()}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#0D8A4E] px-4 py-2 text-xs font-medium text-white hover:bg-[#0A6E3E] disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {testingBackend && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Test & Save Backend URL
-            </button>
-            {getApiBaseUrl() && (
-              <button
-                type="button"
-                onClick={handleResetBackendUrl}
-                className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-medium text-amber-950 hover:bg-amber-100 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                Use Same-Origin (/api)
-              </button>
-            )}
-          </div>
-        </form>
+          <button
+            type="button"
+            onClick={onBackendReconnected}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#0D8A4E] px-3.5 py-1.5 text-xs font-medium text-white hover:bg-[#0A6E3E] whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry Connection
+          </button>
+        </div>
       )}
 
       {errorMsg && (

@@ -264,6 +264,25 @@ export default function App() {
     };
   }, [licenseSession, backendReachable, backendVersion, statusFilter, refreshAnalytics, refreshContacts]);
 
+  // Serverless-friendly polling fallback when QR pairing or campaign sending is active
+  useEffect(() => {
+    if (!licenseSession || !backendReachable) return;
+    const needsWaPoll = waStatus.state === 'connecting' || waStatus.state === 'qr_ready';
+    const needsCampaignPoll = campaign?.status === 'running';
+    if (!needsWaPoll && !needsCampaignPoll) return;
+
+    const timer = setInterval(() => {
+      if (needsWaPoll) {
+        void api.getWhatsAppStatus().then(setWaStatus).catch(() => {});
+      }
+      if (needsCampaignPoll) {
+        void refreshCampaign(statusFilter).catch(() => {});
+      }
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [licenseSession, backendReachable, waStatus.state, campaign?.status, statusFilter, refreshCampaign]);
+
   const handleStatusFilterChange = (nextFilter: string) => {
     setStatusFilter(nextFilter);
     void refreshCampaign(nextFilter);

@@ -111,8 +111,39 @@ class WhatsAppManager {
     }
   }
 
+  private connectionWaiters: Array<() => void> = [];
+
+  private resolveConnectionWaiters(): void {
+    const waiters = this.connectionWaiters.splice(0, this.connectionWaiters.length);
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
+  private waitForQrOrResult(timeoutMs = 9000): Promise<void> {
+    if (this.state === 'qr_ready' || this.state === 'connected' || this.state === 'disconnected') {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      this.connectionWaiters.push(done);
+    });
+  }
+
   public async connectQR(): Promise<WhatsAppStatusSnapshot> {
+    if (this.state === 'connected' && this.sock) {
+      return this.getSnapshot();
+    }
+
     if (this.isConnecting) {
+      await this.waitForQrOrResult(7000);
       return this.getSnapshot();
     }
 
@@ -204,9 +235,11 @@ class WhatsAppManager {
             this.state = 'qr_ready';
             this.lastError = null;
             this.emitStatus();
+            this.resolveConnectionWaiters();
           } catch (err) {
             this.lastError = err instanceof Error ? err.message : 'Failed to render QR code';
             this.emitStatus();
+            this.resolveConnectionWaiters();
           }
         }
 
@@ -220,6 +253,7 @@ class WhatsAppManager {
           this.phoneNumber = phone ? `+${phone}` : null;
           this.displayName = sock.user?.name || 'WhatsApp Linked Device';
           this.emitStatus();
+          this.resolveConnectionWaiters();
         }
 
         if (connection === 'close') {
@@ -238,6 +272,7 @@ class WhatsAppManager {
             this.phoneNumber = null;
             this.displayName = null;
             this.emitStatus();
+            this.resolveConnectionWaiters();
             return;
           }
 
@@ -249,6 +284,7 @@ class WhatsAppManager {
             this.displayName = null;
             this.lastError = 'WhatsApp session logged out. Scan a new QR code to reconnect.';
             this.emitStatus();
+            this.resolveConnectionWaiters();
             this.onUnexpectedDisconnectCallback?.(this.lastError);
             return;
           }
@@ -273,16 +309,20 @@ class WhatsAppManager {
               this.state = 'disconnected';
               this.lastError = 'Unable to reconnect to WhatsApp servers. Click Reconnect to try again.';
               this.emitStatus();
+              this.resolveConnectionWaiters();
             });
           }, shouldReconnectImmediately ? 500 : 3000);
         }
       });
+
+      await this.waitForQrOrResult(9000);
     } catch (err) {
       this.isConnecting = false;
       this.state = 'disconnected';
       this.qrDataUrl = null;
       this.lastError = err instanceof Error ? err.message : 'Failed to initialize WhatsApp connection';
       this.emitStatus();
+      this.resolveConnectionWaiters();
     }
 
     return this.getSnapshot();
@@ -333,6 +373,7 @@ class WhatsAppManager {
     this.displayName = null;
     this.lastError = null;
     this.emitStatus();
+    this.resolveConnectionWaiters();
     return this.getSnapshot();
   }
 
@@ -364,6 +405,7 @@ class WhatsAppManager {
     this.displayName = null;
     this.lastError = null;
     this.emitStatus();
+    this.resolveConnectionWaiters();
     return this.getSnapshot();
   }
 

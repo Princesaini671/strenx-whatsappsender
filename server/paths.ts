@@ -1,8 +1,13 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+
+export const IS_VERCEL = Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
 
 export const DATA_DIR = process.env.STRENX_DATA_DIR
   ? path.resolve(process.env.STRENX_DATA_DIR)
+  : IS_VERCEL
+  ? path.join(os.tmpdir(), 'strenx-whatsapp-sender-data')
   : path.resolve(process.cwd(), 'data');
 
 export const STATE_FILE_PATH = path.join(DATA_DIR, 'strenx-data.json');

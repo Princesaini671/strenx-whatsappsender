@@ -11,42 +11,10 @@ import type {
   WhatsAppStatus,
 } from './types.ts';
 
-const BACKEND_URL_STORAGE_KEY = 'strenx_backend_api_url';
-
-export function getApiBaseUrl(): string {
-  try {
-    const saved = localStorage.getItem(BACKEND_URL_STORAGE_KEY);
-    if (saved && saved.trim()) {
-      return saved.trim().replace(/\/+$/, '');
-    }
-  } catch {
-    // ignore storage read errors
-  }
-
-  const envBase = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_API_BASE_URL;
-  if (envBase && envBase.trim()) {
-    return envBase.trim().replace(/\/+$/, '');
-  }
-
-  return '';
-}
-
-export function setApiBaseUrl(url: string): string {
-  const normalized = url.trim().replace(/\/+$/, '');
-  if (!normalized) {
-    localStorage.removeItem(BACKEND_URL_STORAGE_KEY);
-    return '';
-  }
-  localStorage.setItem(BACKEND_URL_STORAGE_KEY, normalized);
-  return normalized;
-}
-
 export function apiUrl(path: string): string {
   if (!path) return path;
   if (/^https?:\/\//i.test(path)) return path;
-  const base = getApiBaseUrl();
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `${base}${normalizedPath}`;
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 export class BackendUnavailableError extends Error {
@@ -65,7 +33,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     resp = await fetch(url, init);
   } catch {
     throw new BackendUnavailableError(
-      'Cannot reach the Strenx Node.js backend server. Make sure the backend server is running and its URL is configured.',
+      'Cannot reach the Strenx API server. Please check your network connection and retry.',
       0
     );
   }
@@ -76,7 +44,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (resp.status === 404 && (!isJson || !(data as { error?: string }).error)) {
     throw new BackendUnavailableError(
-      'Backend API not found (404). Static web hosting cannot run the WhatsApp QR server — connect a running Strenx Node.js backend URL below or run the full-stack server.',
+      'API endpoint returned 404. Ensure the Vercel /api serverless route is deployed properly.',
       404
     );
   }
@@ -84,7 +52,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   if (!resp.ok) {
     if (!isJson) {
       throw new BackendUnavailableError(
-        `Backend API returned non-JSON response (${resp.status}). Verify your Strenx Backend Server URL.`,
+        `API returned non-JSON response (${resp.status}). Please retry in a moment.`,
         resp.status
       );
     }
@@ -93,7 +61,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!isJson) {
     throw new BackendUnavailableError(
-      'Static hosting returned HTML instead of API JSON. Connect a running Strenx Node.js backend URL.',
+      'Received an unexpected non-JSON response from /api. Verify your deployment routing.',
       200
     );
   }
@@ -101,15 +69,14 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-export async function testBackendHealth(candidateUrl?: string): Promise<{ ok: boolean; error?: string }> {
-  const base = candidateUrl !== undefined ? candidateUrl.trim().replace(/\/+$/, '') : getApiBaseUrl();
+export async function testBackendHealth(): Promise<{ ok: boolean; error?: string }> {
   try {
-    const resp = await fetch(`${base}/api/health`);
+    const resp = await fetch(apiUrl('/api/health'));
     const contentType = resp.headers.get('content-type') || '';
     if (!resp.ok || !contentType.includes('application/json')) {
       return {
         ok: false,
-        error: `Endpoint returned HTTP ${resp.status} instead of Strenx backend JSON.`,
+        error: `Health endpoint returned HTTP ${resp.status}.`,
       };
     }
     const data = (await resp.json()) as { ok?: boolean };
@@ -120,7 +87,7 @@ export async function testBackendHealth(candidateUrl?: string): Promise<{ ok: bo
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'Unable to connect to backend server.',
+      error: err instanceof Error ? err.message : 'Unable to reach /api/health.',
     };
   }
 }
